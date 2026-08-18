@@ -1,4 +1,4 @@
-name: Build rclone Termux
+name: Build rclone 1.72.1 Termux
 
 on:
   workflow_dispatch:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout custom patch
+      - name: Checkout custom files
         uses: actions/checkout@v4
 
-      - name: Checkout Termux packages
+      - name: Checkout pinned Termux packages
         uses: actions/checkout@v4
         with:
           repository: termux/termux-packages
@@ -25,64 +25,116 @@ jobs:
           path: termux-packages
           fetch-depth: 1
 
-      - name: Verify Termux packages revision
+      - name: Verify pinned revision
         working-directory: termux-packages
         run: |
-          echo "Expected:"
-          echo "$TERMUX_PACKAGES_REF"
-
-          echo
-          echo "Actual:"
-          git rev-parse HEAD
+          set -eux
 
           test "$(git rev-parse HEAD)" = "$TERMUX_PACKAGES_REF"
 
-      - name: Show pinned recipes
+          echo "Termux packages:"
+          git rev-parse HEAD
+
+      # Install all host dependencies expected by termux-packages.
+      - name: Setup Ubuntu build environment
         working-directory: termux-packages
         run: |
-          echo "===== GOLANG ====="
-          sed -n '1,220p' packages/golang/build.sh
+          sudo ./scripts/setup-ubuntu.sh
+
+      # This is the important missing step from the previous workflow.
+      # It installs Android SDK + NDK using the exact versions and
+      # checksums defined by this pinned Termux commit.
+      - name: Setup Android SDK and NDK
+        working-directory: termux-packages
+        run: |
+          ./scripts/setup-android-sdk.sh
+
+      - name: Verify Android NDK
+        run: |
+          set -eux
+
+          test -d "$HOME/lib/android-ndk-r29"
+          test -f "$HOME/lib/android-ndk-r29/source.properties"
+
+          echo "NDK:"
+          grep 'Pkg.Revision' \
+            "$HOME/lib/android-ndk-r29/source.properties"
 
           echo
-          echo "===== RCLONE ====="
-          sed -n '1,160p' packages/rclone/build.sh
+          echo "NDK path:"
+          ls -ld "$HOME/lib/android-ndk-r29"
 
       - name: Install custom rclone patch
         run: |
+          set -eux
+
+          test -f file.patch
+
           cp file.patch \
             termux-packages/packages/rclone/termux-rclone.patch
 
-      - name: Verify custom patch
+      - name: Verify rclone recipe
         working-directory: termux-packages
         run: |
-          echo "===== CUSTOM PATCH ====="
+          set -eux
+
+          echo "===== rclone build.sh ====="
+          sed -n '1,220p' packages/rclone/build.sh
+
+          echo
+          echo "===== rclone patch ====="
           cat packages/rclone/termux-rclone.patch
 
           echo
-          echo "Patch file:"
-          test -s packages/rclone/termux-rclone.patch
+          echo "===== golang build.sh ====="
+          sed -n '1,220p' packages/golang/build.sh
 
-      - name: Build rclone
+      # No -I here.
+      #
+      # We intentionally want the dependency chain to build locally,
+      # rather than downloading the prebuilt Go package from the
+      # Termux repository.
+      #
+      # This causes the Termux build system to build golang first,
+      # then rclone.
+      - name: Build Go 1.25.4 and rclone 1.72.1
         working-directory: termux-packages
         run: |
+          set -eux
+
           ./build-package.sh \
             -a aarch64 \
-            -f \
+            -F \
+            golang \
             rclone
 
-      - name: Show build output
+      - name: Inspect generated packages
         working-directory: termux-packages
         run: |
+          set -eux
+
           echo "===== OUTPUT ====="
-          find output -type f -print
+          find output \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' \
+            | sort
 
           echo
           echo "===== SHA256 ====="
           sha256sum output/*.deb
 
-      - name: Upload package
+      - name: Verify rclone package exists
+        working-directory: termux-packages
+        run: |
+          set -eux
+
+          ls output/rclone_*.deb
+
+      - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
           name: rclone-1.72.1-termux-aarch64
           path: |
-            termux-packages/output/*.deb
+            termux-packages/output/rclone_*.deb
+            termux-packages/output/golang_*.deb
