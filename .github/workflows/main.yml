@@ -1,0 +1,153 @@
+name: Build rclone Termux
+
+on:
+  workflow_dispatch:
+
+env:
+  RCLONE_VERSION: "1.72.1"
+  TERMUX_PREFIX: "/data/data/com.termux/files/usr"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Download rclone source
+        run: |
+          curl -L \
+            -o rclone.tar.gz \
+            "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}.tar.gz"
+
+      - name: Verify source SHA256
+        run: |
+          echo "227b84024e7e72056f716ee520c4db8b88ec5f80dc83f0899b431b2ce2b25f9b  rclone.tar.gz" \
+            | sha256sum -c -
+
+      - name: Extract source
+        run: |
+          mkdir rclone-src
+          tar -xzf rclone.tar.gz \
+            --strip-components=1 \
+            -C rclone-src
+
+      - name: Apply Termux patch
+        working-directory: rclone-src
+        run: |
+          test -f ../file.patch
+
+          echo "Checking patch..."
+          git apply --check ../file.patch
+
+          echo "Applying patch..."
+          git apply ../file.patch
+
+      - name: Replace Termux prefix
+        working-directory: rclone-src
+        run: |
+          find . \
+            -type f \
+            -name '*.go' \
+            -print0 |
+            xargs -0 sed -i \
+            "s|@TERMUX_PREFIX@|${TERMUX_PREFIX}|g"
+
+      - name: Verify patch
+        working-directory: rclone-src
+        run: |
+          if grep -R -n '@TERMUX_PREFIX@' \
+              backend/hdfs \
+              cmd/genautocomplete; then
+            echo "::error::Unresolved @TERMUX_PREFIX@ found"
+            exit 1
+          fi
+
+          echo "Patched paths:"
+          grep -R -n \
+            '/data/data/com.termux/files/usr' \
+            backend/hdfs \
+            cmd/genautocomplete
+
+      - name: Prepare GOPATH
+        working-directory: rclone-src
+        run: |
+          mkdir -p .gopath/src/github.com/rclone
+          ln -sf "$PWD" \
+            .gopath/src/github.com/rclone/rclone
+
+          echo "GOPATH=$PWD/.gopath" >> "$GITHUB_ENV"
+
+      - name: Download Go dependencies
+        working-directory: rclone-src
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build rclone
+        working-directory: rclone-src
+        env:
+          CGO_ENABLED: "0"
+          GOOS: android
+          GOARCH: arm64
+        run: |
+          go build -v \
+            -ldflags "-X github.com/rclone/rclone/fs.Version=v${RCLONE_VERSION}-termux" \
+            -tags noselfupdate \
+            -o rclone
+
+      - name: Verify binary
+        working-directory: rclone-src
+        run: |
+          file rclone
+          ls -lh rclone
+
+          echo
+          echo "Checking version string..."
+          strings rclone | grep -F \
+            "v${RCLONE_VERSION}-termux" || true
+
+      - name: Prepare package
+        working-directory: rclone-src
+        run: |
+          mkdir -p package/data/data/com.termux/files/usr/bin
+          mkdir -p package/data/data/com.termux/files/usr/share/man/man1
+
+          cp rclone \
+            package/data/data/com.termux/files/usr/bin/rclone
+
+          cp rclone.1 \
+            package/data/data/com.termux/files/usr/share/man/man1/
+
+          chmod 755 \
+            package/data/data/com.termux/files/usr/bin/rclone
+
+      - name: Create archive
+        run: |
+          cd rclone-src/package
+
+          tar -czf \
+            ../../rclone-${RCLONE_VERSION}-termux-arm64.tar.gz \
+            data
+
+          cd ../..
+
+          sha256sum \
+            rclone-${RCLONE_VERSION}-termux-arm64.tar.gz \
+            > SHA256SUMS
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rclone-${{ env.RCLONE_VERSION }}-termux-arm64
+          path: |
+            rclone-${{ env.RCLONE_VERSION }}-termux-arm64.tar.gz
+            SHA256SUMS
+            rclone-src/rclone
