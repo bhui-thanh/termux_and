@@ -3,151 +3,86 @@ name: Build rclone Termux
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
-  RCLONE_VERSION: "1.72.1"
-  TERMUX_PREFIX: "/data/data/com.termux/files/usr"
+  TERMUX_PACKAGES_REF: "2adb8535c5074aa54cb9fe7f0c973bdffb21b2d7"
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
+      - name: Checkout custom patch
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Checkout Termux packages
+        uses: actions/checkout@v4
         with:
-          go-version: "1.25.x"
-          cache: true
+          repository: termux/termux-packages
+          ref: ${{ env.TERMUX_PACKAGES_REF }}
+          path: termux-packages
+          fetch-depth: 1
 
-      - name: Download rclone source
+      - name: Verify Termux packages revision
+        working-directory: termux-packages
         run: |
-          curl -L \
-            -o rclone.tar.gz \
-            "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}.tar.gz"
-
-      - name: Verify source SHA256
-        run: |
-          echo "227b84024e7e72056f716ee520c4db8b88ec5f80dc83f0899b431b2ce2b25f9b  rclone.tar.gz" \
-            | sha256sum -c -
-
-      - name: Extract source
-        run: |
-          mkdir rclone-src
-          tar -xzf rclone.tar.gz \
-            --strip-components=1 \
-            -C rclone-src
-
-      - name: Apply Termux patch
-        working-directory: rclone-src
-        run: |
-          test -f ../file.patch
-
-          echo "Checking patch..."
-          git apply --check ../file.patch
-
-          echo "Applying patch..."
-          git apply ../file.patch
-
-      - name: Replace Termux prefix
-        working-directory: rclone-src
-        run: |
-          find . \
-            -type f \
-            -name '*.go' \
-            -print0 |
-            xargs -0 sed -i \
-            "s|@TERMUX_PREFIX@|${TERMUX_PREFIX}|g"
-
-      - name: Verify patch
-        working-directory: rclone-src
-        run: |
-          if grep -R -n '@TERMUX_PREFIX@' \
-              backend/hdfs \
-              cmd/genautocomplete; then
-            echo "::error::Unresolved @TERMUX_PREFIX@ found"
-            exit 1
-          fi
-
-          echo "Patched paths:"
-          grep -R -n \
-            '/data/data/com.termux/files/usr' \
-            backend/hdfs \
-            cmd/genautocomplete
-
-      - name: Prepare GOPATH
-        working-directory: rclone-src
-        run: |
-          mkdir -p .gopath/src/github.com/rclone
-          ln -sf "$PWD" \
-            .gopath/src/github.com/rclone/rclone
-
-          echo "GOPATH=$PWD/.gopath" >> "$GITHUB_ENV"
-
-      - name: Download Go dependencies
-        working-directory: rclone-src
-        run: |
-          go mod download
-          go mod verify
-
-      - name: Build rclone
-        working-directory: rclone-src
-        env:
-          CGO_ENABLED: "0"
-          GOOS: android
-          GOARCH: arm64
-        run: |
-          go build -v \
-            -ldflags "-X github.com/rclone/rclone/fs.Version=v${RCLONE_VERSION}-termux" \
-            -tags noselfupdate \
-            -o rclone
-
-      - name: Verify binary
-        working-directory: rclone-src
-        run: |
-          file rclone
-          ls -lh rclone
+          echo "Expected:"
+          echo "$TERMUX_PACKAGES_REF"
 
           echo
-          echo "Checking version string..."
-          strings rclone | grep -F \
-            "v${RCLONE_VERSION}-termux" || true
+          echo "Actual:"
+          git rev-parse HEAD
 
-      - name: Prepare package
-        working-directory: rclone-src
+          test "$(git rev-parse HEAD)" = "$TERMUX_PACKAGES_REF"
+
+      - name: Show pinned recipes
+        working-directory: termux-packages
         run: |
-          mkdir -p package/data/data/com.termux/files/usr/bin
-          mkdir -p package/data/data/com.termux/files/usr/share/man/man1
+          echo "===== GOLANG ====="
+          sed -n '1,220p' packages/golang/build.sh
 
-          cp rclone \
-            package/data/data/com.termux/files/usr/bin/rclone
+          echo
+          echo "===== RCLONE ====="
+          sed -n '1,160p' packages/rclone/build.sh
 
-          cp rclone.1 \
-            package/data/data/com.termux/files/usr/share/man/man1/
-
-          chmod 755 \
-            package/data/data/com.termux/files/usr/bin/rclone
-
-      - name: Create archive
+      - name: Install custom rclone patch
         run: |
-          cd rclone-src/package
+          cp file.patch \
+            termux-packages/packages/rclone/termux-rclone.patch
 
-          tar -czf \
-            ../../rclone-${RCLONE_VERSION}-termux-arm64.tar.gz \
-            data
+      - name: Verify custom patch
+        working-directory: termux-packages
+        run: |
+          echo "===== CUSTOM PATCH ====="
+          cat packages/rclone/termux-rclone.patch
 
-          cd ../..
+          echo
+          echo "Patch file:"
+          test -s packages/rclone/termux-rclone.patch
 
-          sha256sum \
-            rclone-${RCLONE_VERSION}-termux-arm64.tar.gz \
-            > SHA256SUMS
+      - name: Build rclone
+        working-directory: termux-packages
+        run: |
+          ./build-package.sh \
+            -a aarch64 \
+            -f \
+            rclone
 
-      - name: Upload artifact
+      - name: Show build output
+        working-directory: termux-packages
+        run: |
+          echo "===== OUTPUT ====="
+          find output -type f -print
+
+          echo
+          echo "===== SHA256 ====="
+          sha256sum output/*.deb
+
+      - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: rclone-${{ env.RCLONE_VERSION }}-termux-arm64
+          name: rclone-1.72.1-termux-aarch64
           path: |
-            rclone-${{ env.RCLONE_VERSION }}-termux-arm64.tar.gz
-            SHA256SUMS
-            rclone-src/rclone
+            termux-packages/output/*.deb
