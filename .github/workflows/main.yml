@@ -11,20 +11,14 @@ env:
 
 jobs:
   build:
-    name: rclone 1.72.1 / Android ARM64
+    name: rclone 1.72.1 / aarch64
     runs-on: ubuntu-24.04
 
     steps:
 
-      # ============================================================
-      # Checkout repository
-      # ============================================================
-      - name: Checkout custom repository
-        uses: actions/checkout@v4
-
-      # ============================================================
+      # ==========================================================
       # Checkout exact Termux packages revision
-      # ============================================================
+      # ==========================================================
       - name: Checkout Termux packages
         uses: actions/checkout@v4
         with:
@@ -33,9 +27,9 @@ jobs:
           path: termux-packages
           fetch-depth: 1
 
-      # ============================================================
-      # Verify exact Termux commit
-      # ============================================================
+      # ==========================================================
+      # Verify exact commit
+      # ==========================================================
       - name: Verify Termux revision
         working-directory: termux-packages
         run: |
@@ -52,12 +46,12 @@ jobs:
 
           test "$ACTUAL" = "$TERMUX_PACKAGES_REF"
 
-      # ============================================================
+      # ==========================================================
       # Install host dependencies
       #
-      # We intentionally do not run setup-ubuntu.sh.
-      # GitHub ubuntu-24.04 already provides most build tools.
-      # ============================================================
+      # We don't run setup-ubuntu.sh.
+      # GitHub ubuntu-24.04 already provides most basic tools.
+      # ==========================================================
       - name: Install host dependencies
         run: |
           set -eux
@@ -87,16 +81,10 @@ jobs:
             wget \
             zip
 
-      # ============================================================
-      # Configure Java
-      #
-      # Do NOT hardcode:
-      #
-      # /usr/lib/jvm/java-17-openjdk-amd64
-      #
-      # Detect the actual Java installation on the runner.
-      # ============================================================
-      - name: Configure Java 17
+      # ==========================================================
+      # Configure Java 17
+      # ==========================================================
+      - name: Configure Java
         run: |
           set -eux
 
@@ -108,11 +96,7 @@ jobs:
 
           echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
 
-          echo "Java executable:"
-          command -v java
-
-          echo
-          echo "Java version:"
+          echo "Java:"
           java -version
 
           echo
@@ -126,13 +110,12 @@ jobs:
           test -x "$JAVA_HOME/bin/java"
           test -x "$JAVA_HOME/bin/javac"
 
-      # ============================================================
+      # ==========================================================
       # Setup Android SDK + NDK
       #
-      # Uses the setup script from the pinned Termux commit.
-      # This installs the exact Android NDK expected by
-      # termux-packages.
-      # ============================================================
+      # Uses the exact setup script from the pinned Termux
+      # packages revision.
+      # ==========================================================
       - name: Setup Android SDK and NDK
         working-directory: termux-packages
         run: |
@@ -140,9 +123,9 @@ jobs:
 
           ./scripts/setup-android-sdk.sh
 
-      # ============================================================
+      # ==========================================================
       # Verify NDK
-      # ============================================================
+      # ==========================================================
       - name: Verify Android NDK
         run: |
           set -eux
@@ -160,21 +143,14 @@ jobs:
           grep 'Pkg.Revision' \
             "$NDK/source.properties"
 
-      # ============================================================
-      # Prepare Termux filesystem expected by build system
-      #
-      # The pinned Termux build scripts expect:
-      #
-      # /data/TERMUX_ARCH
-      #
-      # and:
-      #
-      # /data/data/com.termux/files/usr
-      # ============================================================
+      # ==========================================================
+      # Prepare filesystem expected by Termux build system
+      # ==========================================================
       - name: Prepare Termux filesystem
         run: |
           set -eux
 
+          # Termux prefix
           sudo mkdir -p \
             /data/data/com.termux/files/usr
 
@@ -182,6 +158,7 @@ jobs:
             "$(id -u):$(id -g)" \
             /data/data/com.termux
 
+          # Architecture file required by this Termux revision
           sudo touch /data/TERMUX_ARCH
 
           sudo chown \
@@ -198,102 +175,68 @@ jobs:
           ls -ld \
             /data/data/com.termux/files/usr
 
-      # ============================================================
-      # Install custom rclone patch
-      #
-      # IMPORTANT:
-      # file.patch should ONLY contain the HDFS change.
-      #
-      # The autocomplete changes are already handled by the
-      # pinned Termux rclone recipe through autocomplete_path.patch.
-      # ============================================================
-      - name: Install rclone custom patch
-        run: |
-          set -eux
-
-          test -f file.patch
-
-          cp \
-            file.patch \
-            termux-packages/packages/rclone/termux-rclone.patch
-
-          test -s \
-            termux-packages/packages/rclone/termux-rclone.patch
-
-      # ============================================================
-      # Display patch files
-      # ============================================================
-      - name: Inspect rclone patches
-        working-directory: termux-packages
-        run: |
-          set -eux
-
-          echo "================================================"
-          echo "RCLONE PATCH FILES"
-          echo "================================================"
-
-          ls -lah \
-            packages/rclone/*.patch
-
-          echo
-          echo "================================================"
-          echo "CUSTOM PATCH"
-          echo "================================================"
-
-          cat \
-            packages/rclone/termux-rclone.patch
-
-      # ============================================================
+      # ==========================================================
       # Verify rclone recipe
-      # ============================================================
+      #
+      # This is the ORIGINAL recipe from the pinned commit.
+      # NO custom patch is injected.
+      # ==========================================================
       - name: Verify rclone recipe
         working-directory: termux-packages
         run: |
           set -eux
 
-          echo "Checking rclone version..."
+          echo "===== rclone build.sh ====="
+
+          cat packages/rclone/build.sh
+
+          echo
+          echo "===== VERSION ====="
 
           grep -F \
             'TERMUX_PKG_VERSION="1.72.1"' \
             packages/rclone/build.sh
 
           echo
-          echo "Checking rclone source SHA256..."
+          echo "===== SHA256 ====="
 
           grep -F \
             '227b84024e7e72056f716ee520c4db8b88ec5f80dc83f0899b431b2ce2b25f9b' \
             packages/rclone/build.sh
 
-          echo
-          echo "Checking rclone source URL..."
-
-          grep -F \
-            'rclone-v${TERMUX_PKG_VERSION}.tar.gz' \
-            packages/rclone/build.sh
-
-      # ============================================================
+      # ==========================================================
       # Verify Go recipe
-      # ============================================================
+      #
+      # The pinned recipe is Go 1.25.4 and applies:
+      #
+      #   fix-hardcoded-etc-resolv-conf.sh
+      #   remove-pidfd.sh
+      # ==========================================================
       - name: Verify Go recipe
         working-directory: termux-packages
         run: |
           set -eux
 
-          echo "Checking Go version..."
+          echo "===== golang build.sh ====="
+
+          cat packages/golang/build.sh
+
+          echo
+          echo "===== VERSION ====="
 
           grep -F \
             'TERMUX_PKG_VERSION="3:1.25.4"' \
             packages/golang/build.sh
 
           echo
-          echo "Checking Go source SHA256..."
+          echo "===== SHA256 ====="
 
           grep -F \
             '160043b7f17b6d60b50369436917fda8d5034640ba39ae2431c6b95a889cc98c' \
             packages/golang/build.sh
 
           echo
-          echo "Checking Termux Go patches..."
+          echo "===== Go Termux patches ====="
 
           grep -F \
             'fix-hardcoded-etc-resolv-conf.sh' \
@@ -303,59 +246,54 @@ jobs:
             'remove-pidfd.sh' \
             packages/golang/build.sh
 
-      # ============================================================
-      # Show important Termux build configuration
-      # ============================================================
-      - name: Show build configuration
+      # ==========================================================
+      # Show existing rclone patches
+      #
+      # These are the patches already provided by Termux.
+      # ==========================================================
+      - name: Show rclone patches
         working-directory: termux-packages
         run: |
           set -eux
 
-          echo "================================================"
-          echo "BUILD CONFIGURATION"
-          echo "================================================"
+          echo "===== RCLONE PATCHES ====="
 
-          echo "TERMUX_PACKAGES_REF=$TERMUX_PACKAGES_REF"
-          echo "TERMUX_ARCH=aarch64"
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "NDK=$HOME/lib/android-ndk-r29"
+          find packages/rclone \
+            -maxdepth 1 \
+            -type f \
+            -name '*.patch' \
+            -print \
+            | sort
 
-          echo
-          echo "rclone:"
-          grep 'TERMUX_PKG_VERSION=' \
-            packages/rclone/build.sh
-
-          echo
-          echo "golang:"
-          grep 'TERMUX_PKG_VERSION=' \
-            packages/golang/build.sh
-
-      # ============================================================
+      # ==========================================================
       # Build rclone
       #
       # IMPORTANT:
       #
-      # -F forces dependency rebuild.
+      # -F forces dependency builds.
       #
-      # We do NOT use -I because that would allow a prebuilt Go
-      # package from the Termux repository to be installed instead
-      # of compiling Go 1.25.4 from source.
+      # We do NOT use:
+      #
+      #   -I
+      #
+      # because we want Go to be built from source using the
+      # pinned Termux golang recipe.
       #
       # Dependency chain:
       #
-      # rclone
-      #   |
-      #   +-- golang 1.25.4
-      #          |
-      #          +-- bootstrap Go
+      #   rclone
+      #      |
+      #      +-- golang 1.25.4
+      #              |
+      #              +-- bootstrap Go
       #
-      # Go receives:
+      # Go receives Termux's:
       #
       #   fix-hardcoded-etc-resolv-conf.sh
       #   remove-pidfd.sh
       #
-      # before rclone is compiled.
-      # ============================================================
+      # before it is used to build rclone.
+      # ==========================================================
       - name: Build rclone
         working-directory: termux-packages
         run: |
@@ -366,17 +304,15 @@ jobs:
             -F \
             rclone
 
-      # ============================================================
+      # ==========================================================
       # Inspect output
-      # ============================================================
+      # ==========================================================
       - name: Inspect build output
         working-directory: termux-packages
         run: |
           set -eux
 
-          echo "================================================"
-          echo "OUTPUT"
-          echo "================================================"
+          echo "===== OUTPUT ====="
 
           find output \
             -maxdepth 1 \
@@ -385,24 +321,20 @@ jobs:
             | sort
 
           echo
-          echo "================================================"
-          echo "RCLONE PACKAGE"
-          echo "================================================"
+          echo "===== RCLONE PACKAGE ====="
 
           ls -lh \
             output/rclone_*.deb
 
           echo
-          echo "================================================"
-          echo "SHA256"
-          echo "================================================"
+          echo "===== SHA256 ====="
 
           sha256sum \
             output/rclone_*.deb
 
-      # ============================================================
-      # Inspect Debian package
-      # ============================================================
+      # ==========================================================
+      # Inspect .deb metadata
+      # ==========================================================
       - name: Inspect rclone package
         working-directory: termux-packages
         run: |
@@ -419,30 +351,22 @@ jobs:
           test -n "$DEB"
           test -f "$DEB"
 
-          echo "Package:"
-          echo "$DEB"
-
-          echo
-          echo "================================================"
-          echo "DEB INFO"
-          echo "================================================"
+          echo "===== DEB INFO ====="
 
           dpkg-deb \
             --info \
             "$DEB"
 
           echo
-          echo "================================================"
-          echo "DEB CONTENTS"
-          echo "================================================"
+          echo "===== DEB CONTENTS ====="
 
           dpkg-deb \
             --contents \
             "$DEB"
 
-      # ============================================================
-      # Extract and inspect rclone binary
-      # ============================================================
+      # ==========================================================
+      # Extract and inspect binary
+      # ==========================================================
       - name: Inspect rclone binary
         working-directory: termux-packages
         run: |
@@ -476,27 +400,21 @@ jobs:
           test -n "$RCLONE"
           test -f "$RCLONE"
 
-          echo "Binary:"
+          echo "===== BINARY ====="
           echo "$RCLONE"
 
           echo
-          echo "================================================"
-          echo "FILE"
-          echo "================================================"
+          echo "===== FILE ====="
 
           file "$RCLONE"
 
           echo
-          echo "================================================"
-          echo "SIZE"
-          echo "================================================"
+          echo "===== SIZE ====="
 
           ls -lh "$RCLONE"
 
           echo
-          echo "================================================"
-          echo "RESOLV.CONF STRINGS"
-          echo "================================================"
+          echo "===== RESOLV.CONF STRINGS ====="
 
           strings "$RCLONE" \
             | grep -E \
@@ -504,9 +422,7 @@ jobs:
             || true
 
           echo
-          echo "================================================"
-          echo "TERMUX PREFIX STRINGS"
-          echo "================================================"
+          echo "===== TERMUX PATH STRINGS ====="
 
           strings "$RCLONE" \
             | grep -F \
@@ -514,9 +430,9 @@ jobs:
             | head -20 \
             || true
 
-      # ============================================================
-      # Generate package checksum
-      # ============================================================
+      # ==========================================================
+      # Generate checksum
+      # ==========================================================
       - name: Generate SHA256SUMS
         working-directory: termux-packages
         run: |
@@ -528,10 +444,10 @@ jobs:
 
           cat rclone-SHA256SUMS
 
-      # ============================================================
-      # Upload final rclone package
-      # ============================================================
-      - name: Upload rclone artifact
+      # ==========================================================
+      # Upload final artifact
+      # ==========================================================
+      - name: Upload rclone package
         uses: actions/upload-artifact@v4
         with:
           name: rclone-1.72.1-termux-aarch64
