@@ -150,15 +150,18 @@ jobs:
         run: |
           set -eux
 
+          # Termux build system uses /data/data as a workspace too.
+          sudo mkdir -p /data/data
+
+          sudo chown \
+            "$(id -u):$(id -g)" \
+            /data/data
+
           # Termux prefix
-          sudo mkdir -p \
+          mkdir -p \
             /data/data/com.termux/files/usr
 
-          sudo chown -R \
-            "$(id -u):$(id -g)" \
-            /data/data/com.termux
-
-          # Architecture file required by this Termux revision
+          # Architecture state required by this Termux revision
           sudo touch /data/TERMUX_ARCH
 
           sudo chown \
@@ -171,9 +174,12 @@ jobs:
           cat /data/TERMUX_ARCH
 
           echo
+          echo "/data/data:"
+          ls -ld /data/data
+
+          echo
           echo "TERMUX PREFIX:"
-          ls -ld \
-            /data/data/com.termux/files/usr
+          ls -ld /data/data/com.termux/files/usr
 
       # ==========================================================
       # Verify rclone recipe
